@@ -59,6 +59,31 @@ def main():
                 dataObj = storage_db.Storage(tableName)
 
                 # to the students: The following needs to be further implemented (many lines can be added)
+
+
+            while True:
+                record = []
+                Field_List = dataObj.getFieldList()
+                for i, x in enumerate(Field_List):
+                    field_name = x[0].strip().decode('utf-8') if isinstance(x[0], bytes) else x[0].strip()
+                    prompt = f'Input value for {field_name} (type: {x[1]}, max len: {x[2]}): '
+                    value = input(prompt)
+                    record.append(value)
+
+                if dataObj.insert_record(record):
+                    print('Record inserted successfully!')
+                else:
+                    print('Failed to insert record!')
+
+                another = input('Add another record? (y/n): ')
+                if another.lower() != 'y':
+                    break
+
+            del dataObj
+            choice = input(PROMPT_STR)
+            
+
+            """
                 record = []
                 Field_List = dataObj.getFieldList()
                 for x in Field_List:
@@ -74,6 +99,11 @@ def main():
                 del dataObj
 
             choice = input(PROMPT_STR)
+            """
+
+
+
+                
 
 
 
