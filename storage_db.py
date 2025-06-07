@@ -352,3 +352,308 @@ class Storage(object):
             self.f_handle.write(self.buf)
             self.f_handle.flush()
             self.f_handle.close()
+
+    
+    def delete_record(self, condition_field, keyword):
+        # 1. 查找条件字段的索引
+        field_index = -1
+        condition_field = condition_field.strip().lower()
+        
+        # 遍历所有字段，找到匹配的字段索引
+        for idx, field in enumerate(self.field_name_list):
+            # 处理字段名（字节串或字符串）
+            field_name = field[0].strip()
+            if isinstance(field_name, bytes):
+                field_name = field_name.decode('utf-8').strip().lower()
+            else:
+                field_name = str(field_name).strip().lower()
+            
+            if field_name == condition_field:
+                field_index = idx
+                break
+        
+        if field_index == -1:
+            print(f"Field '{condition_field}' not found in table")
+            return False
+        
+        # 2. 查找要删除的记录
+        records_to_delete = []
+        keyword = keyword.strip().lower()
+        
+        # 遍历所有记录，找到匹配的记录
+        for i, record in enumerate(self.record_list):
+            # 获取字段值并规范化
+            field_value = record[field_index]
+            if isinstance(field_value, bytes):
+                field_value = field_value.decode('utf-8').strip().lower()
+            elif isinstance(field_value, str):
+                field_value = field_value.strip().lower()
+            else:
+                field_value = str(field_value).strip().lower()
+            
+            if field_value == keyword:
+                records_to_delete.append(i)
+        
+        if not records_to_delete:
+            print(f"No records found with {condition_field}={keyword}")
+            return False
+        
+        # 3. 直接从文件删除记录（不依赖内存备份）
+        # 重新打开文件进行读写
+        self.f_handle.close()
+        self.f_handle = open(self.f_handle.name, 'rb+')
+        
+        # 遍历所有数据块
+        for block_id in range(1, self.data_block_num + 1):
+            # 读取数据块
+            self.f_handle.seek(BLOCK_SIZE * block_id)
+            block_data = self.f_handle.read(BLOCK_SIZE)
+            if not block_data:
+                continue
+            
+            # 解析块头信息
+            block_header = struct.unpack_from('!ii', block_data, 0)
+            block_records = block_header[1]
+            
+            # 读取记录偏移量
+            record_offsets = []
+            offset_start = struct.calcsize('!ii')
+            for i in range(block_records):
+                offset = struct.unpack_from('!i', block_data, offset_start + i * 4)[0]
+                record_offsets.append(offset)
+            
+            # 计算记录大小
+            record_head_len = struct.calcsize('!ii10s')
+            record_content_len = sum(field[2] for field in self.field_name_list)
+            record_size = record_head_len + record_content_len
+            
+            # 创建新块缓冲区
+            new_block_data = bytearray(BLOCK_SIZE)
+            struct.pack_into('!ii', new_block_data, 0, block_id, 0)  # 初始记录数为0
+            new_offsets_start = struct.calcsize('!ii')
+            new_record_start = BLOCK_SIZE
+            
+            # 遍历当前块中的所有记录
+            for i in range(block_records):
+                # 检查是否为要删除的记录
+                record_pos = (block_id - 1, i)
+                if i + (block_id - 1) * block_records in records_to_delete:
+                    continue  # 跳过要删除的记录
+                
+                # 读取记录数据
+                record_data = block_data[record_offsets[i]:record_offsets[i] + record_size]
+                
+                # 添加到新块
+                new_record_start -= record_size
+                new_block_data[new_record_start:new_record_start + record_size] = record_data
+                
+                # 记录偏移量
+                struct.pack_into('!i', new_block_data, new_offsets_start, new_record_start)
+                new_offsets_start += 4
+                new_records = struct.unpack_from('!i', new_block_data, 4)[0] + 1
+                struct.pack_into('!i', new_block_data, 4, new_records)  # 更新记录数
+            
+            # 写入修改后的数据块
+            self.f_handle.seek(BLOCK_SIZE * block_id)
+            self.f_handle.write(new_block_data)
+        
+        # 4. 更新内存状态
+        for idx in sorted(records_to_delete, reverse=True):
+            del self.record_list[idx]
+        
+        # 5. 更新块头信息
+        self.f_handle.seek(0)
+        header_data = self.f_handle.read(struct.calcsize('!iii'))
+        block0_id, data_block_num, num_fields = struct.unpack('!iii', header_data)
+        
+        # 更新数据块数量（可能减少）
+        new_data_block_num = 0
+        for block_id in range(1, data_block_num + 1):
+            self.f_handle.seek(BLOCK_SIZE * block_id)
+            block_header = self.f_handle.read(struct.calcsize('!ii'))
+            if not block_header:
+                break
+            block_records = struct.unpack('!i', block_header[4:8])[0]
+            if block_records > 0:
+                new_data_block_num += 1
+        
+        # 更新文件头
+        self.f_handle.seek(0)
+        self.f_handle.write(struct.pack('!iii', 0, new_data_block_num, num_fields))
+        self.f_handle.flush()
+        
+        # 更新内存中的块计数
+        self.data_block_num = new_data_block_num
+        
+        print(f"Deleted {len(records_to_delete)} records successfully")
+        return True
+
+    # 辅助方法：重写数据文件
+    def _rewrite_data_file(self):
+        # 1. Close the current file handle
+        self.f_handle.close()
+        
+        # 2. Get the original file name
+        original_file_name = self.f_handle.name
+        
+        # 3. Delete the old file
+        os.remove(original_file_name)
+        
+        # 4. Reopen the file in write mode
+        self.f_handle = open(original_file_name, 'wb+')
+        self.open = True
+        
+        # 5. Reinitialize the table structure
+        self.dir_buf = ctypes.create_string_buffer(BLOCK_SIZE)
+        self.block_id, self.data_block_num, self.num_of_fields = 0, 0, len(self.field_name_list)
+        
+        # Write meta data to block 0
+        struct.pack_into('!iii', self.dir_buf, 0, 0, 0, self.num_of_fields)
+        beginIndex = struct.calcsize('!iii')
+        
+        for i, field in enumerate(self.field_name_list):
+            field_name, field_type, field_length = field
+            # Ensure field name is bytes
+            if isinstance(field_name, str):
+                field_name = field_name.encode('utf-8')
+            struct.pack_into('!10sii', self.dir_buf, beginIndex, field_name, field_type, field_length)
+            beginIndex += struct.calcsize('!10sii')
+        
+        self.f_handle.seek(0)
+        self.f_handle.write(self.dir_buf)
+        self.f_handle.flush()
+        
+        # 6. Reset record tracking
+        self.record_list = []
+        self.record_Position = []
+        
+        # 7. Reinsert all current records
+        for record in self.record_list_backup:
+            # Convert record to string list format
+            record_str = []
+            for i, value in enumerate(record):
+                # Handle different data types
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8')
+                elif isinstance(value, int):
+                    value = str(value)
+                elif isinstance(value, bool):
+                    value = str(value).lower()
+                record_str.append(value)
+            
+            # Insert the record
+            if not self.insert_record(record_str):
+                print(f"Failed to reinsert record: {record_str}")
+        
+        # 8. Update state
+        print(f"Rewrote data file with {len(self.record_list)} records")
+
+
+
+    def update_record(self, condition_field, old_value, update_field, new_value):
+        # 1. 查找条件字段的索引
+        cond_field_index = -1
+        update_field_index = -1
+        
+        # 遍历字段列表，查找匹配字段
+        for idx, field in enumerate(self.field_name_list):
+            field_name = field[0].strip()
+            if isinstance(field_name, bytes):
+                field_name = field_name.decode('utf-8').strip()
+            
+            if field_name == condition_field.strip():
+                cond_field_index = idx
+            if field_name == update_field.strip():
+                update_field_index = idx
+        
+        if cond_field_index == -1 or update_field_index == -1:
+            print(f"Field not found. Condition: {condition_field}, Update: {update_field}")
+            return False
+        
+        # 2. 查找匹配的记录位置
+        record_positions = []
+        block_data = {}
+        
+        # 遍历所有数据块
+        for block_id in range(1, self.data_block_num + 1):
+            # 读取数据块
+            self.f_handle.seek(BLOCK_SIZE * block_id)
+            block_content = self.f_handle.read(BLOCK_SIZE)
+            
+            # 解析块头信息
+            block_id_in_file, num_records = struct.unpack('!ii', block_content[:8])
+            record_offsets = []
+            
+            # 读取所有记录的偏移量
+            offset_start = 8
+            for i in range(num_records):
+                offset = struct.unpack_from('!i', block_content, offset_start)[0]
+                record_offsets.append(offset)
+                offset_start += 4
+            
+            # 计算记录大小
+            record_head_size = struct.calcsize('!ii10s')
+            record_content_size = sum(field[2] for field in self.field_name_list)
+            record_size = record_head_size + record_content_size
+            
+            # 遍历记录
+            for record_idx, offset in enumerate(record_offsets):
+                # 读取记录头
+                record_header = block_content[offset:offset + record_head_size]
+                schema_addr, record_len, timestamp = struct.unpack('!ii10s', record_header)
+                
+                # 读取记录内容
+                record_content = block_content[offset + record_head_size:offset + record_size]
+                
+                # 提取条件字段的值
+                field_start = sum(field[2] for field in self.field_name_list[:cond_field_index])
+                field_end = field_start + self.field_name_list[cond_field_index][2]
+                cond_value = record_content[field_start:field_end].strip()
+                
+                # 检查是否匹配
+                if cond_value == old_value.encode('utf-8') or cond_value.decode('utf-8') == old_value:
+                    record_positions.append((block_id, record_idx, offset))
+        
+        if not record_positions:
+            print(f"No matching records found for {condition_field}={old_value}")
+            return False
+        
+        # 3. 直接修改文件中的记录
+        for block_id, record_idx, offset in record_positions:
+            # 移动到记录位置
+            self.f_handle.seek(BLOCK_SIZE * block_id + offset)
+            
+            # 读取记录头
+            record_header = self.f_handle.read(record_head_size)
+            schema_addr, record_len, timestamp = struct.unpack('!ii10s', record_header)
+            
+            # 读取记录内容
+            record_content = self.f_handle.read(record_content_size)
+            
+            # 转换为可修改的字节数组
+            record_bytes = bytearray(record_content)
+            
+            # 计算更新字段的位置
+            field_start = sum(field[2] for field in self.field_name_list[:update_field_index])
+            field_length = self.field_name_list[update_field_index][2]
+            
+            # 确保新值长度正确
+            if len(new_value) > field_length:
+                new_value = new_value[:field_length]
+            elif len(new_value) < field_length:
+                new_value = new_value.ljust(field_length)
+            
+            # 更新字段值
+            new_value_bytes = new_value.encode('utf-8')
+            record_bytes[field_start:field_start + field_length] = new_value_bytes
+            
+            # 写回修改后的记录
+            self.f_handle.seek(BLOCK_SIZE * block_id + offset + record_head_size)
+            self.f_handle.write(record_bytes)
+        
+        # 4. 更新内存中的记录列表（可选）
+        # 这里我们不更新内存状态，因为程序可能会继续运行
+        # 用户下次打开表时会自动加载最新数据
+        
+        print(f"Updated {len(record_positions)} records successfully")
+        return True

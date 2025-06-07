@@ -191,18 +191,50 @@ def main():
         elif choice == '6':  # delete a line of data from the storage file given the keyword
 
             table_name = input('please input the name of the table to be deleted from:')
-            field_name = input('please input the field name and the corresponding keyword (fieldname:keyword):')
             # to the students: to be inserted here, delete the line from data files
 
+            ######################################################修改#######################################################
+            if isinstance(table_name, str):
+                table_name = table_name.encode('utf-8')
+        
+            field_info = input('please input the field name and the corresponding keyword (fieldname:keyword):')
+            if ':' in field_info:
+                field_name, keyword = field_info.split(':', 1)
+                try:
+                    dataObj = storage_db.Storage(table_name)
+                    if dataObj.delete_record(field_name.strip(), keyword.strip()):
+                        print("Record deleted successfully")
+                    del dataObj
+                except Exception as e:
+                    print("Error:", e)
+            else:
+                print("Invalid input format. Use fieldname:keyword")
+            
             choice = input(PROMPT_STR)
 
         elif choice == '7':  # update a line of data given the keyword
 
             table_name = input('please input the name of the table:')
-            field_name = input('please input the field name:')
-            field_name_value = input('please input the old value of the field:')
             # to the students: to be inserted here, update the line according to the user input
+            ######################################################修改#######################################################
 
+            if isinstance(table_name, str):
+                table_name = table_name.encode('utf-8')
+    
+            condition_field = input('please input the condition field name:')
+            old_value = input('please input the old value of the field:')
+            update_field = input('please input the field name to update:')
+            new_value = input('please input the new value:')
+            
+            try:
+                dataObj = storage_db.Storage(table_name)
+                if dataObj.update_record(condition_field.strip(), old_value.strip(), 
+                                        update_field.strip(), new_value.strip()):
+                    print("Record updated successfully")
+                del dataObj
+            except Exception as e:
+                print("Error:", e)
+            
             choice = input(PROMPT_STR)
 
 

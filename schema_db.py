@@ -103,6 +103,27 @@ class Schema(object):
                 return tmp
         '''
         # to be inserted here
+        #############################################################修改#############################################################
+        table_found = False
+        for i in range(len(self.headObj.tableNames)):
+            if self.headObj.tableNames[i][0].strip() == table_name.strip():
+                table_found = True
+                # 获取该表的所有字段信息
+                fields = self.headObj.tableFields.get(table_name.strip().decode('utf-8'), [])
+                print("Field Name\tType\tLength")
+                print("----------------------------")
+                for field in fields:
+                    field_name = field[0].strip().decode('utf-8')
+                    field_type = field[1]
+                    field_length = field[2]
+                    type_str = {0: 'str', 1: 'varstr', 2: 'int', 3: 'bool'}.get(field_type, 'unknown')
+                    print(f"{field_name}\t{type_str}\t{field_length}")
+                break
+        
+        if not table_found:
+            print("Table not found in schema")
+
+
 
     # ------------------------------------------------
     # constructor of the class
